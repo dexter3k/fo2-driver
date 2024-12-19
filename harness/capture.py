@@ -1,5 +1,12 @@
 '''
-Capture - various screen capture routines
+Capture - various screen capture routines.
+
+Note that screen capturing speeds vary by a huge margin on various systems.
+
+dxcam was a good choice on one of my machines, but on another it crashed and was slower than mss.
+mss is currently the only one with (relatively) slow, but consistent captures, taking ~16ms/capture.
+
+The color conversion and resizing code does not seem to take much time, easily in the range of 1ms.
 
 '''
 
