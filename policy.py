@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ActorCriticPolicy(nn.Module):
-	def __init__(self, input_shape=(1, 96, 128), action_dim=2):
+	def __init__(self, input_shape=(1, 96, 128), action_dim=2, log_std=[0.5, 0]):
 		super(ActorCriticPolicy, self).__init__()
 
 		self.input_shape = input_shape
@@ -29,7 +29,7 @@ class ActorCriticPolicy(nn.Module):
 		)
 
 		self.actor_mean = nn.Linear(256, action_dim)
-		self.actor_log_std = nn.Parameter(torch.zeros(action_dim))
+		self.actor_log_std = nn.Parameter(torch.tensor(log_std), requires_grad=False)
 
 		self.critic = nn.Linear(256, 1)
 

@@ -115,7 +115,7 @@ class Agent:
 		return False
 
 	def get_action(self, pixels):
-		pixels_tensor = torch.tensor(pixels).unsqueeze(0).unsqueeze(0)
+		pixels_tensor = torch.tensor(pixels).unsqueeze(0)
 		with torch.no_grad():
 			mean, log_std, value = self.policy(pixels_tensor)
 
@@ -139,7 +139,8 @@ class Agent:
 		# Enable controls
 		self.keys.start()
 
-		max_pos_achieved = self.track.track_position()
+		prev_position = self.track.track_position()
+		max_pos_achieved = prev_position
 		time_of_last_progress = time.perf_counter()
 
 		while True:
@@ -149,8 +150,7 @@ class Agent:
 				discarded = True
 				break
 
-			pixels = capture.capture_gray()
-			
+			pixels = capture.capture_gray()[np.newaxis, ...]
 			action, logp, value = self.get_action(pixels)
 			
 			steering = action[0][0].item()
@@ -165,8 +165,12 @@ class Agent:
 			# which /probably/ only pose problem for debugging?
 			still_on_track = self.game.get_base().get_is_on_track()
 			pos_on_track = self.track.track_position()
+			pos_delta = pos_on_track - prev_position
+			prev_position = pos_on_track
 			game_t_since_start = self.game.get_base().get_seconds_since_start()
 			t_now = time.perf_counter()
+
+			print(f"s={steering:+.1f} t={throttle:+.1f} v={value[0].item():+3.1f} dP={pos_delta:+.1f}")
 
 			# Save pixels, action and reward sources
 			episode.append({
@@ -176,7 +180,7 @@ class Agent:
 				'logp':    logp.item(),
 				'critic':  value[0].item(),
 
-				'position':  pos_on_track,
+				'pos_delta': pos_delta,
 				'game_time': game_t_since_start,
 			})
 
@@ -207,7 +211,6 @@ class Agent:
 		# Make sure to stop key presser
 		self.keys.stop()
 
-		print(f"Trajectory of {len(episode)} steps. completed={completed} discarded={discarded}")
 		return episode, completed, discarded
 
 	def start_episode(self):
@@ -228,6 +231,61 @@ class Agent:
 		# Reset position tracker
 		self.track.reset_position()
 
+def apply_rewards_position(episode, last_reward=0):
+	if len(episode) == 0:
+		return
+
+	for i in range(len(episode) - 1):
+		episode[i]['reward'] = episode[i + 1]['pos_delta']
+
+	episode[-1]['reward'] = last_reward
+
+def apply_returns_reward_to_go(episode):
+	for i in reversed(range(len(episode))):
+		episode[i]['return'] = episode[i]['reward'] + (episode[i + 1]['return'] if i + 1 < len(episode) else 0)
+
 agent = Agent()
-episode, completed, discarded = agent.run_single_episode()
-print(episode)
+optimizer = torch.optim.Adam(agent.policy.parameters(), lr=1e-2)
+
+obs = []
+act = []
+weights = []
+
+while True:
+	episode, completed, discarded = agent.run_single_episode()
+	if discarded:
+		break
+
+	apply_rewards_position(episode)
+	apply_returns_reward_to_go(episode)
+
+	for ep in episode:
+		obs.append(ep['pixels'])
+		act.append(ep['actions'])
+		weights.append(ep['return'])
+
+	total_reward = sum([ep['reward'] for ep in episode])
+	print(f"Added {len(episode)} trajectories with {total_reward:+5.1f} total reward. {len(obs)} trajectories now.")
+
+	if len(obs) > 200:
+		obs = torch.as_tensor(obs, dtype=torch.float32)
+		act = torch.as_tensor(act, dtype=torch.float32)
+		weights = torch.as_tensor(weights, dtype=torch.float32)
+
+		optimizer.zero_grad()
+		mean, log_std, value = agent.policy(obs)
+		std = torch.exp(log_std)
+		dist = torch.distributions.Normal(mean, std)
+		raw_actions = dist.sample()
+		actions = torch.tanh(raw_actions)
+		entropy = dist.entropy().mean()
+		log_prob_raw = dist.log_prob(raw_actions)
+		log_prob_raw = log_prob_raw.sum(dim=-1)
+		log_prob = log_prob_raw - torch.sum(torch.log(1 - actions**2 + 1e-6), dim=-1)
+		loss = -(log_prob * weights).mean()
+		loss.backward()
+		optimizer.step()
+
+		obs = []
+		act = []
+		weights = []
