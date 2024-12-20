@@ -1,9 +1,11 @@
 import time
 import threading
 
+import torch
 import numpy as np
 
 from harness import capture, control, detect
+from policy import ActorCriticPolicy
 
 def escape_and_restart():
 	control.press_and_release_key(control.KEY_ESCAPE)
@@ -81,6 +83,7 @@ class InputController:
 					control.press_key(control.KEY_DOWN if throttle < 0 else control.KEY_UP)
 				if t_passed >= 1:
 					break
+				time.sleep(0.001)
 
 			control.release_key(control.KEY_LEFT if steering < 0 else control.KEY_RIGHT)
 			control.release_key(control.KEY_DOWN if throttle < 0 else control.KEY_UP)
@@ -100,6 +103,8 @@ class Agent:
 
 		self.capture_perf = None
 
+		self.policy = ActorCriticPolicy(input_shape=(1, 96, 128))
+
 		np.random.random()
 
 	def lost_controls(self):
@@ -109,23 +114,24 @@ class Agent:
 			return True
 		return False
 
-	def capture_and_measure(self):
-		t_before = time.perf_counter()
-		pixels = capture.capture_gray(out_size=(128, 96))
-		t_total = time.perf_counter() - t_before
+	def get_action(self, pixels):
+		pixels_tensor = torch.tensor(pixels).unsqueeze(0).unsqueeze(0)
+		with torch.no_grad():
+			mean, log_std, value = self.policy(pixels_tensor)
 
-		if self.capture_perf is None:
-			self.capture_perf = t_total
-		else:
-			s = Agent.SMOOTH_CAPTURE_PERF
-			self.capture_perf = self.capture_perf * s + t_total * (1 - s)
+		std = torch.exp(log_std)
+		dist = torch.distributions.Normal(mean, std)
+		raw_action = dist.sample()
+		action = torch.tanh(raw_action)
+		log_prob_raw = dist.log_prob(raw_action).sum(dim=-1)
+		log_prob = log_prob_raw - torch.log(1 - action**2 + 1e-6).sum(dim=-1)
 
-		return pixels
+		return action, log_prob, value
 
 	def run_single_episode(self):
 		episode = []
 		discarded = False
-		premature = False
+		completed = False
 
 		self.start_episode()
 		time.sleep(-self.game.get_base().get_seconds_since_start() - 0.040)
@@ -143,10 +149,13 @@ class Agent:
 				discarded = True
 				break
 
-			pixels = self.capture_and_measure()
-
-			# action, value, logp = self.get_action(pixels)
-			self.keys.set_actions(np.random.random() * 2 - 1, 0.9)
+			pixels = capture.capture_gray()
+			
+			action, logp, value = self.get_action(pixels)
+			
+			steering = action[0][0].item()
+			throttle = action[0][1].item()
+			self.keys.set_actions(steering, throttle)
 
 			# We have to be careful, because only at this point we should measure
 			# whatever will be used for our rewards, so that rewards are properly
@@ -163,9 +172,9 @@ class Agent:
 			episode.append({
 				'pixels': pixels,
 
-				'actions': [0, 0],
-				'logp':    0,
-				'critic':  0,
+				'actions': [steering, throttle],
+				'logp':    logp.item(),
+				'critic':  value[0].item(),
 
 				'position':  pos_on_track,
 				'game_time': game_t_since_start,
@@ -178,11 +187,9 @@ class Agent:
 				time_of_last_progress = t_now
 
 			if (t_now - time_of_last_progress) * self.timehack > Agent.MAX_TIME_WITHOUT_PROGRESS:
-				premature = True
 				break
 
 			if not still_on_track:
-				premature = True
 				break
 
 			# TODO: We're actually missing a check on whether we finished the race
@@ -200,8 +207,8 @@ class Agent:
 		# Make sure to stop key presser
 		self.keys.stop()
 
-		print(f"Trajectory of {len(episode)} steps. premature={premature} discarded={discarded}")
-		return episode, premature, discarded
+		print(f"Trajectory of {len(episode)} steps. completed={completed} discarded={discarded}")
+		return episode, completed, discarded
 
 	def start_episode(self):
 		# Make sure game window is active
@@ -222,4 +229,5 @@ class Agent:
 		self.track.reset_position()
 
 agent = Agent()
-discarded = agent.run_single_episode()
+episode, completed, discarded = agent.run_single_episode()
+print(episode)

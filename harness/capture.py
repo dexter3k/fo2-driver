@@ -21,7 +21,7 @@ def capture_gray(area=(0, 0, 640, 480), out_size=(128, 96)):
 	pixels = np.asarray(pixels)
 	pixels = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
 	pixels = cv2.resize(pixels, out_size, interpolation=cv2.INTER_AREA)
-	return pixels
+	return (pixels / 255.0).astype(np.float32)
 
 def main():
 	while True:
