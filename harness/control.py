@@ -87,17 +87,24 @@ def release_key(scancode):
     i.ki = KEYBDINPUT(0, scancode, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0, 0)
     SendInput(1, ct.byref(i), ct.sizeof(INPUT))
 
-def press_and_release_key(scancode):
+def press_and_release_key(scancode, sleepAfter=True):
     press_key(scancode)
     time.sleep(0.1)
     release_key(scancode)
+    if sleepAfter:
+        time.sleep(0.1)
 
 # Key mappings (DirectInput scan codes)
 KEY_UP = 0xC8
 KEY_DOWN = 0xD0
 KEY_LEFT = 0xCB
 KEY_RIGHT = 0xCD
-SPACE = 0x39
+
+KEY_RESET = 0x13
+
+KEY_ESCAPE = 0x01
+KEY_ENTER = 0x1C
+KEY_LEFT_CONTROL = 0x1D
 
 # Example Usage
 if __name__ == "__main__":
